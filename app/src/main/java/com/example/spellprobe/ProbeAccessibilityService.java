@@ -27,6 +27,7 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class ProbeAccessibilityService extends AccessibilityService
         implements SpellCheckerSession.SpellCheckerSessionListener {
@@ -57,6 +58,10 @@ public class ProbeAccessibilityService extends AccessibilityService
     private String statusMisspelledList = "";
     private String statusDebug = "";
     private String statusError = null;
+    private int checkTextCount = 0;
+    private int getSuggestionsCallCount = 0;
+    private int onGetSuggestionsCount = 0;
+    private String lastCallbackInfo = "";
 
     @Override
     protected void onServiceConnected() {
@@ -104,7 +109,7 @@ public class ProbeAccessibilityService extends AccessibilityService
         try {
             TextServicesManager tsm = (TextServicesManager)
                     getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
-            spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+            spellCheckerSession = tsm.newSpellCheckerSession(null, new Locale("ru"), this, true);
         } catch (Exception e) {
             spellCheckerSession = null;
             statusError = "Ошибка создания спелчекера: " + e;
@@ -135,6 +140,12 @@ public class ProbeAccessibilityService extends AccessibilityService
         }
         if (statusError != null) {
             sb.append("\n\u26A0 ").append(statusError);
+        }
+        sb.append("\ncheckText:").append(checkTextCount)
+                .append(" getSuggestions вызван:").append(getSuggestionsCallCount)
+                .append(" onGetSuggestions сработал:").append(onGetSuggestionsCount);
+        if (lastCallbackInfo.length() > 0) {
+            sb.append('\n').append(lastCallbackInfo);
         }
         statusView.setText(sb.toString());
     }
@@ -186,6 +197,7 @@ public class ProbeAccessibilityService extends AccessibilityService
                 return;
             }
 
+            checkTextCount++;
             requestGeneration++;
             pendingWords = tokenize(fullText);
             statusWordsFound = pendingWords.size();
@@ -207,6 +219,8 @@ public class ProbeAccessibilityService extends AccessibilityService
             for (int i = 0; i < pendingWords.size(); i++) {
                 infos[i] = new TextInfo(pendingWords.get(i).text, requestGeneration, i);
             }
+            getSuggestionsCallCount++;
+            refreshStatus();
             spellCheckerSession.getSuggestions(infos, MAX_SUGGESTIONS, false);
         } catch (Exception e) {
             statusError = "Ошибка checkText: " + e;
@@ -216,6 +230,13 @@ public class ProbeAccessibilityService extends AccessibilityService
 
     @Override
     public void onGetSuggestions(SuggestionsInfo[] results) {
+        onGetSuggestionsCount++;
+        lastCallbackInfo = "results=" + (results == null ? "null" : ("length=" + results.length));
+        if (results != null && results.length > 0) {
+            lastCallbackInfo += ", cookie=" + results[0].getCookie()
+                    + " (ждали " + requestGeneration + ")";
+        }
+        refreshStatus();
         try {
             if (results == null || results.length == 0) {
                 return;
