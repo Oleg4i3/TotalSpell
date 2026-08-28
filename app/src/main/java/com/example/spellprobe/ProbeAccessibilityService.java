@@ -45,6 +45,9 @@ public class ProbeAccessibilityService extends AccessibilityService
     private int overlayOffsetX;
     private int overlayOffsetY;
 
+    private AccessibilityNodeInfo trackedNode;
+    private String trackedPackage = "";
+
     private int requestGeneration = 0;
     private List<Word> pendingWords = new ArrayList<>();
     private final List<Word> misspelledWords = new ArrayList<>();
@@ -156,27 +159,38 @@ public class ProbeAccessibilityService extends AccessibilityService
         if (node == null) {
             return;
         }
+
         CharSequence text = node.getText();
-        CharSequence pkg = event.getPackageName();
-        node.recycle();
+        CharSequence pkgCs = event.getPackageName();
+        String pkg = pkgCs != null ? pkgCs.toString() : "\u2014";
+
+        if (text == null || text.length() == 0) {
+            node.recycle();
+            if (pkg.equals(trackedPackage)) {
+                statusApp = pkg;
+                statusTextLength = 0;
+                statusWordsFound = 0;
+                statusMisspelledCount = 0;
+                statusMisspelledList = "";
+                refreshStatus();
+                clearAll();
+            }
+            return;
+        }
+
+        if (trackedNode != null) {
+            trackedNode.recycle();
+        }
+        trackedNode = node;
+        trackedPackage = pkg;
 
         if (handler == null) {
             return;
         }
         handler.removeCallbacksAndMessages(null);
 
-        statusApp = pkg != null ? pkg.toString() : "\u2014";
-        statusTextLength = text != null ? text.length() : 0;
-
-        if (text == null || text.length() == 0) {
-            statusWordsFound = 0;
-            statusMisspelledCount = 0;
-            statusMisspelledList = "";
-            refreshStatus();
-            clearAll();
-            return;
-        }
-
+        statusApp = pkg;
+        statusTextLength = text.length();
         refreshStatus();
 
         final String snapshot = text.toString();
@@ -185,14 +199,18 @@ public class ProbeAccessibilityService extends AccessibilityService
 
     private void checkText(String fullText) {
         try {
-            AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (node == null) {
-                statusError = "checkText: findFocus вернул null";
+            if (trackedNode == null) {
+                statusError = "checkText: нет отслеживаемого поля";
                 refreshStatus();
                 return;
             }
-            CharSequence currentText = node.getText();
-            node.recycle();
+            boolean refreshed = trackedNode.refresh();
+            if (!refreshed) {
+                statusError = "checkText: refresh() не удался, поле недоступно";
+                refreshStatus();
+                return;
+            }
+            CharSequence currentText = trackedNode.getText();
             if (currentText == null || !currentText.toString().equals(fullText)) {
                 return;
             }
@@ -297,8 +315,7 @@ public class ProbeAccessibilityService extends AccessibilityService
             misspelledWords.clear();
             misspelledWords.addAll(flagged);
 
-            AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-            if (node == null) {
+            if (trackedNode == null || !trackedNode.refresh()) {
                 misspelledWords.clear();
                 underlineView.setWords(new ArrayList<>());
                 return;
@@ -312,14 +329,13 @@ public class ProbeAccessibilityService extends AccessibilityService
                 args.putInt(
                         AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH,
                         word.end - word.start);
-                node.refreshWithExtraData(
+                trackedNode.refreshWithExtraData(
                         AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args);
-                Bundle extras = node.getExtras();
+                Bundle extras = trackedNode.getExtras();
                 Parcelable[] rects = extras.getParcelableArray(
                         AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY);
                 word.rect = unionRect(rects);
             }
-            node.recycle();
 
             removeSuggestionPopup();
             rebuildTouchTargets();
@@ -432,17 +448,15 @@ public class ProbeAccessibilityService extends AccessibilityService
     }
 
     private void applySuggestion(Word word, String replacement) {
-        AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-        if (node == null) {
+        if (trackedNode == null || !trackedNode.refresh()) {
             return;
         }
-        CharSequence current = node.getText();
+        CharSequence current = trackedNode.getText();
         boolean stillValid = current != null
                 && word.end <= current.length()
                 && current.subSequence(word.start, word.end).toString().equals(word.text);
 
         if (!stillValid) {
-            node.recycle();
             clearAll();
             return;
         }
@@ -453,8 +467,7 @@ public class ProbeAccessibilityService extends AccessibilityService
 
         Bundle args = new Bundle();
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, updated);
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-        node.recycle();
+        trackedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
 
         clearAll();
     }
@@ -553,6 +566,10 @@ public class ProbeAccessibilityService extends AccessibilityService
     public void onDestroy() {
         super.onDestroy();
         clearAll();
+        if (trackedNode != null) {
+            trackedNode.recycle();
+            trackedNode = null;
+        }
         if (windowManager != null) {
             if (underlineView != null) {
                 safeRemoveView(underlineView);
