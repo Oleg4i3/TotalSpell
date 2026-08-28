@@ -23,14 +23,11 @@ import android.view.textservice.TextInfo;
 import android.view.textservice.TextServicesManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Реальный спелчекер-оверлей. Подчёркивает слова с ошибками в текстовом поле
- * любого приложения и по тапу на слово показывает варианты замены.
- */
 public class ProbeAccessibilityService extends AccessibilityService
         implements SpellCheckerSession.SpellCheckerSessionListener {
 
@@ -39,6 +36,7 @@ public class ProbeAccessibilityService extends AccessibilityService
     private static final int MAX_SUGGESTIONS = 4;
 
     private WindowManager windowManager;
+    private TextView statusView;
     private UnderlineView underlineView;
     private SpellCheckerSession spellCheckerSession;
     private Handler handler;
@@ -52,6 +50,13 @@ public class ProbeAccessibilityService extends AccessibilityService
     private final List<View> touchTargets = new ArrayList<>();
     private View suggestionPopup;
 
+    private String statusApp = "\u2014";
+    private int statusTextLength = 0;
+    private int statusWordsFound = 0;
+    private int statusMisspelledCount = 0;
+    private String statusMisspelledList = "";
+    private String statusError = null;
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
@@ -59,12 +64,23 @@ public class ProbeAccessibilityService extends AccessibilityService
         handler = new Handler(Looper.getMainLooper());
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
-        TextServicesManager tsm =
-                (TextServicesManager) getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
-        spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+        statusView = new TextView(this);
+        statusView.setBackgroundColor(0xCC000000);
+        statusView.setTextColor(0xFFFFFFFF);
+        statusView.setTextSize(11);
+        statusView.setPadding(16, 16, 16, 16);
+        WindowManager.LayoutParams statusParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT);
+        statusParams.gravity = Gravity.TOP;
+        windowManager.addView(statusView, statusParams);
 
         underlineView = new UnderlineView(this);
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+        WindowManager.LayoutParams underlineParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -73,8 +89,8 @@ public class ProbeAccessibilityService extends AccessibilityService
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.TOP | Gravity.START;
-        windowManager.addView(underlineView, params);
+        underlineParams.gravity = Gravity.TOP | Gravity.START;
+        windowManager.addView(underlineView, underlineParams);
 
         underlineView.post(() -> {
             int[] location = new int[2];
@@ -83,6 +99,40 @@ public class ProbeAccessibilityService extends AccessibilityService
             overlayOffsetY = location[1];
             underlineView.setOffset(overlayOffsetX, overlayOffsetY);
         });
+
+        try {
+            TextServicesManager tsm = (TextServicesManager)
+                    getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
+            spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+        } catch (Exception e) {
+            spellCheckerSession = null;
+            statusError = "Ошибка создания спелчекера: " + e;
+        }
+
+        if (spellCheckerSession == null && statusError == null) {
+            statusError = "newSpellCheckerSession() вернул null. Проверьте Настройки "
+                    + "\u2192 Система \u2192 Язык и ввод \u2192 Проверка правописания.";
+        }
+
+        refreshStatus();
+    }
+
+    private void refreshStatus() {
+        if (statusView == null) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("TotalSpell \u2014 приложение: ").append(statusApp).append('\n');
+        sb.append("символов: ").append(statusTextLength)
+                .append(", слов найдено: ").append(statusWordsFound)
+                .append(", с ошибками: ").append(statusMisspelledCount);
+        if (statusMisspelledCount > 0) {
+            sb.append(" (").append(statusMisspelledList).append(')');
+        }
+        if (statusError != null) {
+            sb.append("\n\u26A0 ").append(statusError);
+        }
+        statusView.setText(sb.toString());
     }
 
     @Override
@@ -92,6 +142,7 @@ public class ProbeAccessibilityService extends AccessibilityService
             return;
         }
         CharSequence text = node.getText();
+        CharSequence pkg = event.getPackageName();
         node.recycle();
 
         if (handler == null) {
@@ -99,109 +150,151 @@ public class ProbeAccessibilityService extends AccessibilityService
         }
         handler.removeCallbacksAndMessages(null);
 
+        statusApp = pkg != null ? pkg.toString() : "\u2014";
+        statusTextLength = text != null ? text.length() : 0;
+
         if (text == null || text.length() == 0) {
+            statusWordsFound = 0;
+            statusMisspelledCount = 0;
+            statusMisspelledList = "";
+            refreshStatus();
             clearAll();
             return;
         }
+
+        refreshStatus();
 
         final String snapshot = text.toString();
         handler.postDelayed(() -> checkText(snapshot), DEBOUNCE_MS);
     }
 
     private void checkText(String fullText) {
-        AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-        if (node == null) {
-            return;
-        }
-        CharSequence currentText = node.getText();
-        node.recycle();
-        if (currentText == null || !currentText.toString().equals(fullText)) {
-            return;
-        }
+        try {
+            AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (node == null) {
+                statusError = "checkText: findFocus вернул null";
+                refreshStatus();
+                return;
+            }
+            CharSequence currentText = node.getText();
+            node.recycle();
+            if (currentText == null || !currentText.toString().equals(fullText)) {
+                return;
+            }
 
-        requestGeneration++;
-        pendingWords = tokenize(fullText);
-        if (pendingWords.isEmpty()) {
-            clearAll();
-            return;
-        }
+            requestGeneration++;
+            pendingWords = tokenize(fullText);
+            statusWordsFound = pendingWords.size();
+            statusError = null;
+            refreshStatus();
 
-        TextInfo[] infos = new TextInfo[pendingWords.size()];
-        for (int i = 0; i < pendingWords.size(); i++) {
-            infos[i] = new TextInfo(pendingWords.get(i).text, requestGeneration, i);
-        }
-        if (spellCheckerSession != null) {
+            if (pendingWords.isEmpty()) {
+                clearAll();
+                return;
+            }
+
+            if (spellCheckerSession == null) {
+                statusError = "Спелчекер-сессия недоступна (null)";
+                refreshStatus();
+                return;
+            }
+
+            TextInfo[] infos = new TextInfo[pendingWords.size()];
+            for (int i = 0; i < pendingWords.size(); i++) {
+                infos[i] = new TextInfo(pendingWords.get(i).text, requestGeneration, i);
+            }
             spellCheckerSession.getSuggestions(infos, MAX_SUGGESTIONS, false);
+        } catch (Exception e) {
+            statusError = "Ошибка checkText: " + e;
+            refreshStatus();
         }
     }
 
     @Override
     public void onGetSuggestions(SuggestionsInfo[] results) {
-        if (results == null || results.length == 0) {
-            return;
-        }
-        if (results[0].getCookie() != requestGeneration) {
-            return;
-        }
+        try {
+            if (results == null || results.length == 0) {
+                return;
+            }
+            if (results[0].getCookie() != requestGeneration) {
+                return;
+            }
 
-        List<Word> flagged = new ArrayList<>();
-        for (SuggestionsInfo info : results) {
-            int index = info.getSequence();
-            if (index < 0 || index >= pendingWords.size()) {
-                continue;
+            List<Word> flagged = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            for (SuggestionsInfo info : results) {
+                int index = info.getSequence();
+                if (index < 0 || index >= pendingWords.size()) {
+                    continue;
+                }
+                boolean inDictionary = (info.getSuggestionsAttributes()
+                        & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
+                if (inDictionary || info.getSuggestionsCount() <= 0) {
+                    continue;
+                }
+                Word word = pendingWords.get(index);
+                List<String> suggestions = new ArrayList<>();
+                int count = Math.min(info.getSuggestionsCount(), MAX_SUGGESTIONS);
+                for (int j = 0; j < count; j++) {
+                    suggestions.add(info.getSuggestionAt(j));
+                }
+                word.suggestions = suggestions;
+                flagged.add(word);
+                names.add(word.text);
             }
-            boolean inDictionary = (info.getSuggestionsAttributes()
-                    & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
-            if (inDictionary || info.getSuggestionsCount() <= 0) {
-                continue;
-            }
-            Word word = pendingWords.get(index);
-            List<String> suggestions = new ArrayList<>();
-            int count = Math.min(info.getSuggestionsCount(), MAX_SUGGESTIONS);
-            for (int j = 0; j < count; j++) {
-                suggestions.add(info.getSuggestionAt(j));
-            }
-            word.suggestions = suggestions;
-            flagged.add(word);
-        }
 
-        applyFlaggedWords(flagged);
+            statusMisspelledCount = flagged.size();
+            statusMisspelledList = String.join(", ", names);
+            statusError = null;
+            refreshStatus();
+
+            applyFlaggedWords(flagged);
+        } catch (Exception e) {
+            statusError = "Ошибка onGetSuggestions: " + e;
+            refreshStatus();
+        }
     }
 
     @Override
     public void onGetSentenceSuggestions(SentenceSuggestionsInfo[] results) {
-        // Не используется — проверяем по отдельным словам через onGetSuggestions.
     }
 
     private void applyFlaggedWords(List<Word> flagged) {
-        misspelledWords.clear();
-        misspelledWords.addAll(flagged);
-
-        AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-        if (node == null) {
+        try {
             misspelledWords.clear();
-            underlineView.setWords(new ArrayList<>());
-            return;
-        }
+            misspelledWords.addAll(flagged);
 
-        for (Word word : misspelledWords) {
-            Bundle args = new Bundle();
-            args.putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX,
-                    word.start);
-            args.putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH,
-                    word.end - word.start);
-            node.refreshWithExtraData(
-                    AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args);
-            Bundle extras = node.getExtras();
-            Parcelable[] rects = extras.getParcelableArray(
-                    AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY);
-            word.rect = unionRect(rects);
-        }
-        node.recycle();
+            AccessibilityNodeInfo node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (node == null) {
+                misspelledWords.clear();
+                underlineView.setWords(new ArrayList<>());
+                return;
+            }
 
-        removeSuggestionPopup();
-        rebuildTouchTargets();
-        underlineView.setWords(misspelledWords);
+            for (Word word : misspelledWords) {
+                Bundle args = new Bundle();
+                args.putInt(
+                        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX,
+                        word.start);
+                args.putInt(
+                        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH,
+                        word.end - word.start);
+                node.refreshWithExtraData(
+                        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args);
+                Bundle extras = node.getExtras();
+                Parcelable[] rects = extras.getParcelableArray(
+                        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY);
+                word.rect = unionRect(rects);
+            }
+            node.recycle();
+
+            removeSuggestionPopup();
+            rebuildTouchTargets();
+            underlineView.setWords(misspelledWords);
+        } catch (Exception e) {
+            statusError = "Ошибка applyFlaggedWords: " + e;
+            refreshStatus();
+        }
     }
 
     private RectF unionRect(Parcelable[] rects) {
@@ -342,7 +435,6 @@ public class ProbeAccessibilityService extends AccessibilityService
         try {
             windowManager.removeView(v);
         } catch (IllegalArgumentException e) {
-            // Окно уже было удалено — ничего страшного.
         }
     }
 
@@ -421,8 +513,13 @@ public class ProbeAccessibilityService extends AccessibilityService
     public void onDestroy() {
         super.onDestroy();
         clearAll();
-        if (windowManager != null && underlineView != null) {
-            safeRemoveView(underlineView);
+        if (windowManager != null) {
+            if (underlineView != null) {
+                safeRemoveView(underlineView);
+            }
+            if (statusView != null) {
+                safeRemoveView(statusView);
+            }
         }
         if (spellCheckerSession != null) {
             spellCheckerSession.close();
