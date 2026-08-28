@@ -55,6 +55,7 @@ public class ProbeAccessibilityService extends AccessibilityService
     private int statusWordsFound = 0;
     private int statusMisspelledCount = 0;
     private String statusMisspelledList = "";
+    private String statusDebug = "";
     private String statusError = null;
 
     @Override
@@ -128,6 +129,9 @@ public class ProbeAccessibilityService extends AccessibilityService
                 .append(", с ошибками: ").append(statusMisspelledCount);
         if (statusMisspelledCount > 0) {
             sb.append(" (").append(statusMisspelledList).append(')');
+        }
+        if (statusDebug != null && statusDebug.length() > 0) {
+            sb.append('\n').append(statusDebug);
         }
         if (statusError != null) {
             sb.append("\n\u26A0 ").append(statusError);
@@ -222,20 +226,27 @@ public class ProbeAccessibilityService extends AccessibilityService
 
             List<Word> flagged = new ArrayList<>();
             List<String> names = new ArrayList<>();
+            StringBuilder debug = new StringBuilder();
             for (SuggestionsInfo info : results) {
                 int index = info.getSequence();
+                String label = (index >= 0 && index < pendingWords.size())
+                        ? pendingWords.get(index).text : ("#" + index);
+                int attrs = info.getSuggestionsAttributes();
+                int count = info.getSuggestionsCount();
+                debug.append(label).append("[a=").append(attrs)
+                        .append(",n=").append(count).append("] ");
+
                 if (index < 0 || index >= pendingWords.size()) {
                     continue;
                 }
-                boolean inDictionary = (info.getSuggestionsAttributes()
-                        & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
-                if (inDictionary || info.getSuggestionsCount() <= 0) {
+                boolean inDictionary = (attrs & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
+                if (inDictionary) {
                     continue;
                 }
                 Word word = pendingWords.get(index);
                 List<String> suggestions = new ArrayList<>();
-                int count = Math.min(info.getSuggestionsCount(), MAX_SUGGESTIONS);
-                for (int j = 0; j < count; j++) {
+                int limit = Math.min(Math.max(count, 0), MAX_SUGGESTIONS);
+                for (int j = 0; j < limit; j++) {
                     suggestions.add(info.getSuggestionAt(j));
                 }
                 word.suggestions = suggestions;
@@ -245,6 +256,7 @@ public class ProbeAccessibilityService extends AccessibilityService
 
             statusMisspelledCount = flagged.size();
             statusMisspelledList = String.join(", ", names);
+            statusDebug = debug.toString();
             statusError = null;
             refreshStatus();
 
@@ -350,7 +362,7 @@ public class ProbeAccessibilityService extends AccessibilityService
 
     private void showSuggestionPopup(Word word) {
         removeSuggestionPopup();
-        if (word.suggestions == null || word.suggestions.isEmpty() || word.rect == null) {
+        if (word.rect == null) {
             return;
         }
 
@@ -359,7 +371,14 @@ public class ProbeAccessibilityService extends AccessibilityService
         layout.setBackgroundColor(0xFFFFFFFF);
         layout.setPadding(12, 12, 12, 12);
 
-        for (String suggestion : word.suggestions) {
+        if (word.suggestions == null || word.suggestions.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("Помечено как ошибка, вариантов замены нет");
+            empty.setPadding(8, 8, 8, 8);
+            layout.addView(empty);
+        }
+
+        for (String suggestion : word.suggestions == null ? new ArrayList<String>() : word.suggestions) {
             Button button = new Button(this);
             button.setText(suggestion);
             button.setAllCaps(false);
