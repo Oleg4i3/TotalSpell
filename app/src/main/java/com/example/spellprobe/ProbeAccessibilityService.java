@@ -31,7 +31,7 @@ import java.util.List;
 public class ProbeAccessibilityService extends AccessibilityService
         implements SpellCheckerSession.SpellCheckerSessionListener {
 
-    private static final long DEBOUNCE_MS = 500;
+    private static final long DEBOUNCE_MS = 900;
     private static final int MAX_CHECK_LENGTH = 400;
     private static final int MAX_SUGGESTIONS = 4;
 
@@ -48,7 +48,7 @@ public class ProbeAccessibilityService extends AccessibilityService
     private String trackedPackage = "";
 
     private int requestGeneration = 0;
-    private List<Word> pendingWords = new ArrayList<>();
+    private String lastCheckedText = "";
     private final List<Word> misspelledWords = new ArrayList<>();
     private final List<View> touchTargets = new ArrayList<>();
     private View suggestionPopup;
@@ -183,6 +183,7 @@ public class ProbeAccessibilityService extends AccessibilityService
                     statusWordsFound = 0;
                     statusMisspelledCount = 0;
                     statusMisspelledList = "";
+                    statusDebug = "";
                     refreshStatus();
                     clearAll();
                 }, 300);
@@ -229,15 +230,9 @@ public class ProbeAccessibilityService extends AccessibilityService
 
             checkTextCount++;
             requestGeneration++;
-            pendingWords = tokenize(fullText);
-            statusWordsFound = pendingWords.size();
+            statusWordsFound = tokenize(fullText).size();
             statusError = null;
             refreshStatus();
-
-            if (pendingWords.isEmpty()) {
-                clearAll();
-                return;
-            }
 
             if (spellCheckerSession == null) {
                 ensureSpellCheckerSession();
@@ -248,13 +243,14 @@ public class ProbeAccessibilityService extends AccessibilityService
                 return;
             }
 
-            TextInfo[] infos = new TextInfo[pendingWords.size()];
-            for (int i = 0; i < pendingWords.size(); i++) {
-                infos[i] = new TextInfo(pendingWords.get(i).text, requestGeneration, i);
-            }
+            String textToCheck = fullText.length() > MAX_CHECK_LENGTH
+                    ? fullText.substring(0, MAX_CHECK_LENGTH) : fullText;
+            lastCheckedText = textToCheck;
+
+            TextInfo info = new TextInfo(textToCheck, requestGeneration, 0);
             getSuggestionsCallCount++;
             refreshStatus();
-            spellCheckerSession.getSuggestions(infos, MAX_SUGGESTIONS, true);
+            spellCheckerSession.getSentenceSuggestions(new TextInfo[]{info}, MAX_SUGGESTIONS);
         } catch (Exception e) {
             statusError = "Ошибка checkText: " + e;
             refreshStatus();
@@ -263,41 +259,60 @@ public class ProbeAccessibilityService extends AccessibilityService
 
     @Override
     public void onGetSuggestions(SuggestionsInfo[] results) {
+        // Больше не используется — проверяем целым предложением через onGetSentenceSuggestions.
+    }
+
+    @Override
+    public void onGetSentenceSuggestions(SentenceSuggestionsInfo[] results) {
         onGetSuggestionsCount++;
         lastCallbackInfo = "results=" + (results == null ? "null" : ("length=" + results.length));
-        if (results != null && results.length > 0) {
-            lastCallbackInfo += ", cookie=" + results[0].getCookie()
-                    + " (ждали " + requestGeneration + ")";
-        }
         refreshStatus();
         try {
             if (results == null || results.length == 0) {
                 return;
             }
-            if (results[0].getCookie() != requestGeneration) {
-                return;
+            SentenceSuggestionsInfo ssi = results[0];
+            int spanCount = ssi.getSuggestionsCount();
+
+            if (spanCount > 0) {
+                SuggestionsInfo firstInfo = ssi.getSuggestionsInfoAt(0);
+                if (firstInfo != null && firstInfo.getCookie() != requestGeneration) {
+                    lastCallbackInfo += ", устарело";
+                    refreshStatus();
+                    return;
+                }
             }
 
             List<Word> flagged = new ArrayList<>();
             List<String> names = new ArrayList<>();
             StringBuilder debug = new StringBuilder();
-            for (SuggestionsInfo info : results) {
-                int index = info.getSequence();
-                String label = (index >= 0 && index < pendingWords.size())
-                        ? pendingWords.get(index).text : ("#" + index);
+
+            for (int i = 0; i < spanCount; i++) {
+                SuggestionsInfo info = ssi.getSuggestionsInfoAt(i);
+                if (info == null) {
+                    continue;
+                }
+                int offset = ssi.getOffsetAt(i);
+                int length = ssi.getLengthAt(i);
+                if (offset < 0 || length <= 0 || offset + length > lastCheckedText.length()) {
+                    continue;
+                }
+                String wordText = lastCheckedText.substring(offset, offset + length);
                 int attrs = info.getSuggestionsAttributes();
                 int count = info.getSuggestionsCount();
-                debug.append(label).append("[a=").append(attrs)
+                debug.append(wordText).append("[a=").append(attrs)
                         .append(",n=").append(count).append("] ");
 
-                if (index < 0 || index >= pendingWords.size()) {
+                boolean looksLikeTypo =
+                        (attrs & SuggestionsInfo.RESULT_ATTR_LOOKS_LIKE_TYPO) != 0;
+                if (!looksLikeTypo) {
                     continue;
                 }
-                boolean inDictionary = (attrs & SuggestionsInfo.RESULT_ATTR_IN_THE_DICTIONARY) != 0;
-                if (inDictionary) {
-                    continue;
-                }
-                Word word = pendingWords.get(index);
+
+                Word word = new Word();
+                word.start = offset;
+                word.end = offset + length;
+                word.text = wordText;
                 List<String> suggestions = new ArrayList<>();
                 int limit = Math.min(Math.max(count, 0), MAX_SUGGESTIONS);
                 for (int j = 0; j < limit; j++) {
@@ -316,13 +331,9 @@ public class ProbeAccessibilityService extends AccessibilityService
 
             applyFlaggedWords(flagged);
         } catch (Exception e) {
-            statusError = "Ошибка onGetSuggestions: " + e;
+            statusError = "Ошибка onGetSentenceSuggestions: " + e;
             refreshStatus();
         }
-    }
-
-    @Override
-    public void onGetSentenceSuggestions(SentenceSuggestionsInfo[] results) {
     }
 
     private void applyFlaggedWords(List<Word> flagged) {
