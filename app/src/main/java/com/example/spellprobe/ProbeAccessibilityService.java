@@ -27,7 +27,6 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 public class ProbeAccessibilityService extends AccessibilityService
         implements SpellCheckerSession.SpellCheckerSessionListener {
@@ -112,7 +111,7 @@ public class ProbeAccessibilityService extends AccessibilityService
         try {
             TextServicesManager tsm = (TextServicesManager)
                     getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
-            spellCheckerSession = tsm.newSpellCheckerSession(null, new Locale("ru"), this, true);
+            spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
         } catch (Exception e) {
             spellCheckerSession = null;
             statusError = "Ошибка создания спелчекера: " + e;
