@@ -108,10 +108,22 @@ public class ProbeAccessibilityService extends AccessibilityService
             underlineView.setOffset(overlayOffsetX, overlayOffsetY);
         });
 
+        ensureSpellCheckerSession();
+
+        refreshStatus();
+    }
+
+    private void ensureSpellCheckerSession() {
+        if (spellCheckerSession != null) {
+            return;
+        }
         try {
             TextServicesManager tsm = (TextServicesManager)
                     getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
             spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+            if (spellCheckerSession != null) {
+                statusError = null;
+            }
         } catch (Exception e) {
             spellCheckerSession = null;
             statusError = "Ошибка создания спелчекера: " + e;
@@ -121,8 +133,6 @@ public class ProbeAccessibilityService extends AccessibilityService
             statusError = "newSpellCheckerSession() вернул null. Проверьте Настройки "
                     + "\u2192 Система \u2192 Язык и ввод \u2192 Проверка правописания.";
         }
-
-        refreshStatus();
     }
 
     private void refreshStatus() {
@@ -165,14 +175,17 @@ public class ProbeAccessibilityService extends AccessibilityService
 
         if (text == null || text.length() == 0) {
             node.recycle();
-            if (pkg.equals(trackedPackage)) {
-                statusApp = pkg;
-                statusTextLength = 0;
-                statusWordsFound = 0;
-                statusMisspelledCount = 0;
-                statusMisspelledList = "";
-                refreshStatus();
-                clearAll();
+            if (pkg.equals(trackedPackage) && handler != null) {
+                handler.removeCallbacksAndMessages(null);
+                handler.postDelayed(() -> {
+                    statusApp = pkg;
+                    statusTextLength = 0;
+                    statusWordsFound = 0;
+                    statusMisspelledCount = 0;
+                    statusMisspelledList = "";
+                    refreshStatus();
+                    clearAll();
+                }, 300);
             }
             return;
         }
@@ -227,6 +240,9 @@ public class ProbeAccessibilityService extends AccessibilityService
             }
 
             if (spellCheckerSession == null) {
+                ensureSpellCheckerSession();
+            }
+            if (spellCheckerSession == null) {
                 statusError = "Спелчекер-сессия недоступна (null)";
                 refreshStatus();
                 return;
@@ -238,7 +254,7 @@ public class ProbeAccessibilityService extends AccessibilityService
             }
             getSuggestionsCallCount++;
             refreshStatus();
-            spellCheckerSession.getSuggestions(infos, MAX_SUGGESTIONS, false);
+            spellCheckerSession.getSuggestions(infos, MAX_SUGGESTIONS, true);
         } catch (Exception e) {
             statusError = "Ошибка checkText: " + e;
             refreshStatus();
