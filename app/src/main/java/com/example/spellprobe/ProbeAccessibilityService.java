@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -113,6 +114,20 @@ public class ProbeAccessibilityService extends AccessibilityService
         refreshStatus();
     }
 
+    private String getCurrentImePackage() {
+        try {
+            String ime = Settings.Secure.getString(
+                    getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+            if (ime != null) {
+                int slash = ime.indexOf('/');
+                return slash > 0 ? ime.substring(0, slash) : ime;
+            }
+        } catch (Exception e) {
+            // игнорируем — просто не будем знать пакет клавиатуры
+        }
+        return null;
+    }
+
     private void ensureSpellCheckerSession() {
         if (spellCheckerSession != null) {
             return;
@@ -167,7 +182,9 @@ public class ProbeAccessibilityService extends AccessibilityService
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             CharSequence pkgCs = event.getPackageName();
             String pkg = pkgCs != null ? pkgCs.toString() : "";
-            if (!pkg.isEmpty() && !pkg.equals(trackedPackage)) {
+            String imePackage = getCurrentImePackage();
+            boolean isKeyboard = imePackage != null && imePackage.equals(pkg);
+            if (!pkg.isEmpty() && !isKeyboard && !pkg.equals(trackedPackage)) {
                 if (handler != null) {
                     handler.removeCallbacksAndMessages(null);
                 }
