@@ -3,8 +3,8 @@ package com.example.spellprobe;
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
 import android.os.Bundle;
@@ -166,6 +166,10 @@ public class ProbeAccessibilityService extends AccessibilityService
     public void onAccessibilityEvent(AccessibilityEvent event) {
         AccessibilityNodeInfo node = event.getSource();
         if (node == null) {
+            return;
+        }
+        if (!node.isEditable()) {
+            node.recycle();
             return;
         }
 
@@ -555,7 +559,8 @@ public class ProbeAccessibilityService extends AccessibilityService
 
         UnderlineView(Context context) {
             super(context);
-            paint.setColor(Color.RED);
+            paint.setColor(0xFFAA00FF);
+            paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(6f);
         }
 
@@ -579,8 +584,26 @@ public class ProbeAccessibilityService extends AccessibilityService
                 float left = w.rect.left - offsetX;
                 float right = w.rect.right - offsetX;
                 float y = w.rect.bottom - offsetY;
-                canvas.drawLine(left, y, right, y, paint);
+                drawWavyLine(canvas, left, right, y);
             }
+        }
+
+        private void drawWavyLine(Canvas canvas, float left, float right, float y) {
+            Path path = new Path();
+            float waveWidth = 10f;
+            float waveHeight = 4f;
+            path.moveTo(left, y);
+            float x = left;
+            boolean up = true;
+            while (x < right) {
+                float nextX = Math.min(x + waveWidth, right);
+                float controlX = (x + nextX) / 2;
+                float controlY = up ? y - waveHeight : y + waveHeight;
+                path.quadTo(controlX, controlY, nextX, y);
+                x = nextX;
+                up = !up;
+            }
+            canvas.drawPath(path, paint);
         }
     }
 
