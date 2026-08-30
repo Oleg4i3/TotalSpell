@@ -164,6 +164,25 @@ public class ProbeAccessibilityService extends AccessibilityService
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            CharSequence pkgCs = event.getPackageName();
+            String pkg = pkgCs != null ? pkgCs.toString() : "";
+            if (!pkg.isEmpty() && !pkg.equals(trackedPackage)) {
+                if (handler != null) {
+                    handler.removeCallbacksAndMessages(null);
+                }
+                statusApp = pkg;
+                statusTextLength = 0;
+                statusWordsFound = 0;
+                statusMisspelledCount = 0;
+                statusMisspelledList = "";
+                statusDebug = "";
+                refreshStatus();
+                clearAll();
+            }
+            return;
+        }
+
         AccessibilityNodeInfo node = event.getSource();
         if (node == null) {
             return;
