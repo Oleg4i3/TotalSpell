@@ -17,6 +17,8 @@ import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.InputMethodSubtype;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SuggestionsInfo;
@@ -28,6 +30,7 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class ProbeAccessibilityService extends AccessibilityService
         implements SpellCheckerSession.SpellCheckerSessionListener {
@@ -40,6 +43,7 @@ public class ProbeAccessibilityService extends AccessibilityService
     private TextView statusView;
     private UnderlineView underlineView;
     private SpellCheckerSession spellCheckerSession;
+    private Locale currentSessionLocale;
     private Handler handler;
 
     private int overlayOffsetX;
@@ -109,7 +113,7 @@ public class ProbeAccessibilityService extends AccessibilityService
             underlineView.setOffset(overlayOffsetX, overlayOffsetY);
         });
 
-        ensureSpellCheckerSession();
+        ensureSpellCheckerSession(Locale.getDefault());
 
         refreshStatus();
     }
@@ -128,14 +132,40 @@ public class ProbeAccessibilityService extends AccessibilityService
         return null;
     }
 
-    private void ensureSpellCheckerSession() {
-        if (spellCheckerSession != null) {
-            return;
+    private Locale detectLocale() {
+        try {
+            InputMethodManager imm = (InputMethodManager)
+                    getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                InputMethodSubtype subtype = imm.getCurrentInputMethodSubtype();
+                if (subtype != null) {
+                    String tag = subtype.getLanguageTag();
+                    if (tag != null && !tag.isEmpty()) {
+                        return Locale.forLanguageTag(tag);
+                    }
+                    String localeStr = subtype.getLocale();
+                    if (localeStr != null && !localeStr.isEmpty()) {
+                        String lang = localeStr.split("_")[0];
+                        return new Locale(lang);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // игнорируем, используем запасной вариант ниже
         }
+        return Locale.getDefault();
+    }
+
+    private void ensureSpellCheckerSession(Locale locale) {
         try {
             TextServicesManager tsm = (TextServicesManager)
                     getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
-            spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+            spellCheckerSession = tsm.newSpellCheckerSession(null, locale, this, true);
+            if (spellCheckerSession == null) {
+                // На некоторых устройствах конкретный Locale не проходит — пробуем без него.
+                spellCheckerSession = tsm.newSpellCheckerSession(null, null, this, true);
+            }
+            currentSessionLocale = locale;
             if (spellCheckerSession != null) {
                 statusError = null;
             }
@@ -157,6 +187,7 @@ public class ProbeAccessibilityService extends AccessibilityService
         StringBuilder sb = new StringBuilder();
         sb.append("TotalSpell \u2014 приложение: ").append(statusApp).append('\n');
         sb.append("символов: ").append(statusTextLength)
+                .append(", язык: ").append(currentSessionLocale == null ? "\u2014" : currentSessionLocale)
                 .append(", слов найдено: ").append(statusWordsFound)
                 .append(", с ошибками: ").append(statusMisspelledCount);
         if (statusMisspelledCount > 0) {
@@ -284,8 +315,13 @@ public class ProbeAccessibilityService extends AccessibilityService
             statusError = null;
             refreshStatus();
 
-            if (spellCheckerSession == null) {
-                ensureSpellCheckerSession();
+            Locale detectedLocale = detectLocale();
+            if (spellCheckerSession == null || !detectedLocale.equals(currentSessionLocale)) {
+                if (spellCheckerSession != null) {
+                    spellCheckerSession.close();
+                    spellCheckerSession = null;
+                }
+                ensureSpellCheckerSession(detectedLocale);
             }
             if (spellCheckerSession == null) {
                 statusError = "Спелчекер-сессия недоступна (null)";
