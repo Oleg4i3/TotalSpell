@@ -184,7 +184,8 @@ public class ProbeAccessibilityService extends AccessibilityService
             String pkg = pkgCs != null ? pkgCs.toString() : "";
             String imePackage = getCurrentImePackage();
             boolean isKeyboard = imePackage != null && imePackage.equals(pkg);
-            if (!pkg.isEmpty() && !isKeyboard && !pkg.equals(trackedPackage)) {
+            boolean isSelf = pkg.equals(getPackageName());
+            if (!pkg.isEmpty() && !isKeyboard && !isSelf && !pkg.equals(trackedPackage)) {
                 if (handler != null) {
                     handler.removeCallbacksAndMessages(null);
                 }
@@ -195,6 +196,15 @@ public class ProbeAccessibilityService extends AccessibilityService
                 statusMisspelledList = "";
                 statusDebug = "";
                 refreshStatus();
+                clearAll();
+            }
+            return;
+        }
+
+        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            CharSequence scrollPkgCs = event.getPackageName();
+            String scrollPkg = scrollPkgCs != null ? scrollPkgCs.toString() : "";
+            if (scrollPkg.equals(trackedPackage)) {
                 clearAll();
             }
             return;
