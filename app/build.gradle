@@ -1,21 +1,45 @@
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 android {
-    namespace 'com.example.spellprobe'
+    namespace 'com.spellswitch'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.spellprobe"
+        applicationId "com.spellswitch"
         minSdk 26
         targetSdk 34
         versionCode 1
         versionName "1.0"
     }
 
+    signingConfigs {
+        debug {
+            // Зафиксированный ключ, закоммиченный в репозиторий — иначе AGP
+            // генерирует новый случайный debug.keystore на каждой чистой
+            // виртуалке GitHub Actions, подпись каждой сборки не совпадает
+            // с предыдущей, и Android требует удалить приложение перед
+            // установкой новой версии (а вместе с удалением слетает и
+            // выданное через adb разрешение WRITE_SECURE_SETTINGS).
+            storeFile file("../keystore/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
     }
 }
