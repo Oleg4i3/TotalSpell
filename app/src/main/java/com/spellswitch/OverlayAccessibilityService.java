@@ -61,6 +61,8 @@ public class OverlayAccessibilityService extends AccessibilityService
     static final String KEY_OVERLAY_Y = "overlay_y";
     static final String KEY_SHOW_FLAG = "show_flag";
     static final String KEY_AUTO_SPELLCHECK_ENABLED = "auto_spellcheck_enabled";
+    static final String KEY_AUTO_DETECT_LANGUAGE = "auto_detect_language";
+    static final String KEY_DEBUG_STATUS_ENABLED = "debug_status_enabled";
 
     private static final int LONG_PRESS_MS = 500;
     private static final int DRAG_SLOP_PX = 12;
@@ -159,6 +161,8 @@ public class OverlayAccessibilityService extends AccessibilityService
                 if (!isAutoSpellCheckEnabled()) {
                     clearSpellCheckOverlays();
                 }
+            } else if (KEY_DEBUG_STATUS_ENABLED.equals(key)) {
+                applySpellCheckVisibility();
             }
         };
         prefs.registerOnSharedPreferenceChangeListener(prefsListener);
@@ -420,14 +424,14 @@ public class OverlayAccessibilityService extends AccessibilityService
     }
 
     private void applySpellCheckVisibility() {
-        boolean enabled = isAutoSpellCheckEnabled();
+        boolean visible = isAutoSpellCheckEnabled() && isDebugStatusEnabled();
         if (statusView != null) {
-            statusView.setVisibility(enabled ? View.VISIBLE : View.GONE);
+            statusView.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
     }
 
     private void refreshStatus() {
-        if (statusView == null || !isAutoSpellCheckEnabled()) {
+        if (statusView == null || !isAutoSpellCheckEnabled() || !isDebugStatusEnabled()) {
             return;
         }
         StringBuilder sb = new StringBuilder();
@@ -456,14 +460,27 @@ public class OverlayAccessibilityService extends AccessibilityService
         return null;
     }
 
+    private boolean isAutoDetectLanguageEnabled() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_AUTO_DETECT_LANGUAGE, true);
+    }
+
+    private boolean isDebugStatusEnabled() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_DEBUG_STATUS_ENABLED, false);
+    }
+
     private String detectLangCode(String text) {
         boolean hasUkrainianLetter = false;
         boolean hasRussianOnlyLetter = false;
         int cyrillicCount = 0;
+        int latinCount = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CYRILLIC) {
                 cyrillicCount++;
+            } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+                latinCount++;
             }
             if ("\u0456\u0457\u0454\u0491\u0406\u0407\u0404\u0490".indexOf(c) >= 0) {
                 hasUkrainianLetter = true;
@@ -480,16 +497,20 @@ public class OverlayAccessibilityService extends AccessibilityService
             return "ru";
         }
 
-        boolean mostlyCyrillic = text.length() > 0 && cyrillicCount * 2 > text.length();
-        if (mostlyCyrillic) {
+        if (cyrillicCount > 0 && cyrillicCount >= latinCount) {
             String current = SpellCheckerSwitcher.currentCode(this);
             if ("ru".equals(current) || "uk".equals(current)) {
                 return current;
             }
             return "ru";
         }
+        if (latinCount > 0) {
+            return "en";
+        }
 
-        return "en";
+        // Ни кириллицы, ни латиницы (пусто, цифры, знаки препинания) —
+        // не меняем язык, остаёмся на текущем, а не сбрасываем на английский.
+        return SpellCheckerSwitcher.currentCode(this);
     }
 
     private void ensureSpellCheckerSession() {
@@ -588,6 +609,9 @@ public class OverlayAccessibilityService extends AccessibilityService
 
     private void checkText(String fullText) {
         try {
+            if (fullText == null || fullText.trim().isEmpty()) {
+                return;
+            }
             if (trackedNode == null) {
                 return;
             }
@@ -601,17 +625,21 @@ public class OverlayAccessibilityService extends AccessibilityService
 
             requestGeneration++;
 
-            String detectedLangCode = detectLangCode(fullText);
-            String actualCode = SpellCheckerSwitcher.currentCode(this);
-            if (!detectedLangCode.equals(actualCode)) {
-                SpellCheckerSwitcher.setLanguage(this, detectedLangCode);
-                overlayView.setText(SpellCheckerSwitcher.currentDisplayText(this));
-                if (spellCheckerSession != null) {
-                    spellCheckerSession.close();
-                    spellCheckerSession = null;
+            if (isAutoDetectLanguageEnabled()) {
+                String detectedLangCode = detectLangCode(fullText);
+                String actualCode = SpellCheckerSwitcher.currentCode(this);
+                if (!detectedLangCode.equals(actualCode)) {
+                    SpellCheckerSwitcher.setLanguage(this, detectedLangCode);
+                    overlayView.setText(SpellCheckerSwitcher.currentDisplayText(this));
+                    if (spellCheckerSession != null) {
+                        spellCheckerSession.close();
+                        spellCheckerSession = null;
+                    }
                 }
+                statusLangCode = detectedLangCode;
+            } else {
+                statusLangCode = SpellCheckerSwitcher.currentCode(this);
             }
-            statusLangCode = detectedLangCode;
 
             if (spellCheckerSession == null) {
                 ensureSpellCheckerSession();

@@ -246,6 +246,38 @@ public class MainActivity extends Activity {
                         .apply());
         parent.addView(checkBox);
 
+        boolean autoDetect = prefs.getBoolean(
+                OverlayAccessibilityService.KEY_AUTO_DETECT_LANGUAGE, true);
+        CheckBox autoDetectBox = new CheckBox(this);
+        autoDetectBox.setText("Автоматически определять язык по тексту");
+        autoDetectBox.setChecked(autoDetect);
+        autoDetectBox.setPadding(24 * density, 0, 0, 0);
+        autoDetectBox.setOnCheckedChangeListener((buttonView, isChecked) ->
+                getSharedPreferences(OverlayAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(OverlayAccessibilityService.KEY_AUTO_DETECT_LANGUAGE, isChecked)
+                        .apply());
+        parent.addView(autoDetectBox);
+
+        TextView autoDetectNote = new TextView(this);
+        autoDetectNote.setText("Выключено — язык проверки не переключается автоматически, "
+                + "используется только тот, что выбран ярлыком/меню вручную.");
+        autoDetectNote.setPadding(24 * density, 0, 0, pad / 2);
+        parent.addView(autoDetectNote);
+
+        boolean debugStatus = prefs.getBoolean(
+                OverlayAccessibilityService.KEY_DEBUG_STATUS_ENABLED, false);
+        CheckBox debugBox = new CheckBox(this);
+        debugBox.setText("Показывать отладочную строку сверху экрана");
+        debugBox.setChecked(debugStatus);
+        debugBox.setPadding(24 * density, 0, 0, 0);
+        debugBox.setOnCheckedChangeListener((buttonView, isChecked) ->
+                getSharedPreferences(OverlayAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(OverlayAccessibilityService.KEY_DEBUG_STATUS_ENABLED, isChecked)
+                        .apply());
+        parent.addView(debugBox);
+
         TextView note = new TextView(this);
         note.setText("Определяет язык по печатаемому тексту и сама переключает язык "
                 + "проверки — тот же самый, что и ярлык выше, поэтому они не конфликтуют. "
