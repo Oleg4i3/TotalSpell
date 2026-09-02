@@ -60,6 +60,7 @@ public class OverlayAccessibilityService extends AccessibilityService
     static final String KEY_OVERLAY_X = "overlay_x";
     static final String KEY_OVERLAY_Y = "overlay_y";
     static final String KEY_SHOW_FLAG = "show_flag";
+    static final String KEY_ICON_PINNED = "icon_pinned";
     static final String KEY_AUTO_SPELLCHECK_ENABLED = "auto_spellcheck_enabled";
     static final String KEY_AUTO_DETECT_LANGUAGE = "auto_detect_language";
     static final String KEY_DEBUG_STATUS_ENABLED = "debug_status_enabled";
@@ -243,6 +244,9 @@ public class OverlayAccessibilityService extends AccessibilityService
                 return true;
 
             case MotionEvent.ACTION_MOVE: {
+                if (isIconPinned()) {
+                    return true;
+                }
                 float dx = event.getRawX() - touchStartX;
                 float dy = event.getRawY() - touchStartY;
                 if (!isDragging && (Math.abs(dx) > DRAG_SLOP_PX || Math.abs(dy) > DRAG_SLOP_PX)) {
@@ -332,16 +336,37 @@ public class OverlayAccessibilityService extends AccessibilityService
                 .edit().putBoolean(KEY_TAP_THROUGH, enabled).apply();
     }
 
+    private boolean isIconPinned() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_ICON_PINNED, false);
+    }
+
+    private void setIconPinned(boolean pinned) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_ICON_PINNED, pinned).apply();
+    }
+
+    private void setAutoSpellCheckEnabled(boolean enabled) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_AUTO_SPELLCHECK_ENABLED, enabled).apply();
+    }
+
     private void showLanguageMenu() {
         boolean tapThroughOn = isTapThroughEnabled();
+        boolean pinned = isIconPinned();
+        boolean everywhereOn = isAutoSpellCheckEnabled();
         String[] order = SpellCheckerSwitcher.getOrder(this);
 
-        String[] items = new String[order.length + 1];
+        String[] items = new String[order.length + 3];
         for (int i = 0; i < order.length; i++) {
             items[i] = SpellCheckerSwitcher.menuNameFor(order[i]);
         }
         items[order.length] = "Синхро-тап по раскладке: "
                 + (tapThroughOn ? "ВКЛ (нажмите, чтобы выключить)" : "ВЫКЛ (нажмите, чтобы включить)");
+        items[order.length + 1] = "Закрепить значок: "
+                + (pinned ? "ВКЛ (нажмите, чтобы открепить)" : "ВЫКЛ (нажмите, чтобы закрепить)");
+        items[order.length + 2] = "Проверять орфографию везде: "
+                + (everywhereOn ? "ВКЛ (нажмите, чтобы выключить)" : "ВЫКЛ (нажмите, чтобы включить)");
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.app_name))
@@ -350,8 +375,12 @@ public class OverlayAccessibilityService extends AccessibilityService
                         SpellCheckerSwitcher.setLanguage(this, order[which]);
                         overlayView.setText(SpellCheckerSwitcher.currentDisplayText(this));
                         restartSpellCheckerSessionForNewLanguage();
-                    } else {
+                    } else if (which == order.length) {
                         setTapThroughEnabled(!tapThroughOn);
+                    } else if (which == order.length + 1) {
+                        setIconPinned(!pinned);
+                    } else {
+                        setAutoSpellCheckEnabled(!everywhereOn);
                     }
                 })
                 .create();
